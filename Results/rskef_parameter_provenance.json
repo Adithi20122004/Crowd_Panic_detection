@@ -1,0 +1,57 @@
+{
+  "beta_div": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "0.4"
+  },
+  "calibration_frames": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "150"
+  },
+  "calibration_strategy": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "fixed_150"
+  },
+  "csrnet_crowd_floor": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "4.0"
+  },
+  "enable_gmc": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "False"
+  },
+  "fps": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "30.0"
+  },
+  "k_off": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "1.8"
+  },
+  "k_on": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "3.2"
+  },
+  "mass_representation": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "area_mass"
+  },
+  "persistence_frames": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "7"
+  },
+  "use_directional_disorder": {
+    "type": "class_attribute",
+    "status": "STATIC_VALUE",
+    "value": "False"
+  }
+}

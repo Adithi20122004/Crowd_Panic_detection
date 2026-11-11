@@ -1,0 +1,192 @@
+{
+  "file_audit": {
+    "detector.py": {
+      "status": "COPIED",
+      "reconstructed": false,
+      "line_count": 192
+    },
+    "features.py": {
+      "status": "COPIED",
+      "reconstructed": true,
+      "line_count": 95
+    },
+    "gmc.py": {
+      "status": "COPIED",
+      "reconstructed": true,
+      "line_count": 94
+    },
+    "calibration.py": {
+      "status": "COPIED",
+      "reconstructed": true,
+      "line_count": 148
+    },
+    "density.py": {
+      "status": "COPIED",
+      "reconstructed": false,
+      "line_count": 126
+    },
+    "config.py": {
+      "status": "COPIED",
+      "reconstructed": true,
+      "line_count": 88
+    }
+  },
+  "modules": {
+    "config": {
+      "classes": {
+        "RskefConfig": {
+          "methods": {
+            "__init__": "(self, fps: float = 30.0, resize_width: int = <factory>, resize_height: int = <factory>, mass_representation: str = 'area_mass', csrnet_crowd_floor: float = 4.0, calibration_strategy: str = 'fixed_150', calibration_frames: int = 150, min_sigma_floor: float = <factory>, min_threshold_floor: float = <factory>, enable_gmc: bool = False, gmc_max_features: int = <factory>, gmc_ransac_threshold: float = <factory>, beta_div: float = 0.4, div_scale: float = <factory>, bidirectional_divergence: bool = <factory>, use_directional_disorder: bool = False, disorder_weight: float = <factory>, jerk_delta_frames: int = <factory>, surge_hold_frames: int = <factory>, theta_jerk: float = <factory>, g_0: float = <factory>, ema_alpha: float = <factory>, k_on: float = 3.2, k_off: float = 1.8, persistence_frames: int = 7, max_alarm_unanchored_frames: int = <factory>) -> None",
+            "unresolved_fields": "(self)"
+          },
+          "fields": [
+            "fps",
+            "resize_width",
+            "resize_height",
+            "mass_representation",
+            "csrnet_crowd_floor",
+            "calibration_strategy",
+            "calibration_frames",
+            "min_sigma_floor",
+            "min_threshold_floor",
+            "enable_gmc",
+            "gmc_max_features",
+            "gmc_ransac_threshold",
+            "beta_div",
+            "div_scale",
+            "bidirectional_divergence",
+            "use_directional_disorder",
+            "disorder_weight",
+            "jerk_delta_frames",
+            "surge_hold_frames",
+            "theta_jerk",
+            "g_0",
+            "ema_alpha",
+            "k_on",
+            "k_off",
+            "persistence_frames",
+            "max_alarm_unanchored_frames"
+          ],
+          "doc": "RskefConfig(fps: float = 30.0, resize_width: int = <factory>, resize_height: int = <factory>, mass_representation: str = 'area_mass', csrnet_crowd_floor: float = 4.0, calibration_strategy: str = 'fixed_150', calibration_frames: int = 150, min_sigma_floor: float = <factory>, min_threshold_floor: float = <factory>, enable_gmc: bool = False, gmc_max_features: int = <factory>, gmc_ransac_threshold: float = <factory>, beta_div: float = 0.4, div_scale: float = <factory>, bidirectional_divergence: bool = <factory>, use_directional_disorder: bool = False, disorder_weight: float = <factory>, jerk_delta_frames: int = <factory>, surge_hold_frames: int = <factory>, theta_jerk: float = <factory>, g_0: float = <factory>, ema_alpha: float = <factory>, k_on: float = 3.2, k_off: float = 1.8, persistence_frames: int = 7, max_alarm_unanchored_frames: int = <factory>)"
+        }
+      },
+      "functions": {},
+      "variables": [
+        "dataclass",
+        "field",
+        "fields"
+      ]
+    },
+    "features": {
+      "classes": {},
+      "functions": {
+        "compute_flow": {
+          "signature": "(prev_gray: numpy.ndarray, curr_gray: numpy.ndarray) -> numpy.ndarray",
+          "doc": "Dense Farneback flow, shape (H, W, 2): channel 0 = dx, channel 1 = dy (pixels/frame)."
+        },
+        "extract_motion_features": {
+          "signature": "(prev_gray: numpy.ndarray, curr_gray: numpy.ndarray, cfg) -> Dict",
+          "doc": ""
+        }
+      },
+      "variables": [
+        "ACTIVE_MAG_THRESHOLD",
+        "Dict",
+        "FARNEBACK_PARAMS",
+        "VELOCITY_CAP_PERCENTILE"
+      ]
+    },
+    "gmc": {
+      "classes": {
+        "GlobalMotionCompensator": {
+          "methods": {
+            "__init__": "(self, max_features: int, ransac_threshold: float)",
+            "estimate_and_warp": "(self, prev_gray: numpy.ndarray, curr_gray: numpy.ndarray) -> Tuple[numpy.ndarray, Dict]"
+          },
+          "fields": [],
+          "doc": ""
+        }
+      },
+      "functions": {},
+      "variables": [
+        "Dict",
+        "Tuple"
+      ]
+    },
+    "calibration": {
+      "classes": {
+        "BaselineCalibrator": {
+          "methods": {
+            "__init__": "(self, cfg, reference_prior: Optional[Dict[str, float]] = None)",
+            "step": "(self, ema_score: float, pred_label: int, consecutive_exceed: int, g_active: float) -> Tuple[float, float, bool]"
+          },
+          "fields": [],
+          "doc": ""
+        }
+      },
+      "functions": {
+        "robust_stats": {
+          "signature": "(scores, min_sigma_floor: float) -> Tuple[float, float, float]",
+          "doc": "(median, MAD, sigma) with the sigma floor applied."
+        },
+        "thresholds_from_stats": {
+          "signature": "(med: float, sigma: float, k_on: float, k_off: float, min_threshold_floor: float) -> Tuple[float, float]",
+          "doc": ""
+        }
+      },
+      "variables": [
+        "Dict",
+        "GATE_ANCHOR_MARGIN",
+        "MAD_TO_SIGMA",
+        "Optional",
+        "STRATEGIES",
+        "T_OFF_FLOOR_FACTOR",
+        "Tuple",
+        "deque"
+      ]
+    },
+    "density": {
+      "classes": {},
+      "functions": {
+        "compute_density_kinetic_energy": {
+          "signature": "(density_map: numpy.ndarray, mag: numpy.ndarray, active_mask: numpy.ndarray, normalization_mode: str = 'csrnet_active_mass', crowd_floor: float = 4.0) -> Tuple[float, float, float]",
+          "doc": "Computes density-weighted kinetic energy.\nReturns:\n  (energy_score, active_crowd_mass, total_crowd_count)"
+        },
+        "estimate_density_map": {
+          "signature": "(frame_bgr: numpy.ndarray, model: Optional[object] = None, device: str = 'cpu') -> numpy.ndarray",
+          "doc": "Computes CSRNet density map if model weights are present.\nOtherwise produces an adaptive edge/intensity luminance density prior for evaluation."
+        }
+      },
+      "variables": [
+        "Optional",
+        "TORCH_AVAILABLE",
+        "Tuple"
+      ]
+    },
+    "detector": {
+      "classes": {},
+      "functions": {
+        "run_rskef_detector": {
+          "signature": "(video_path: str, gt_ranges: List[Tuple[int, int]], cfg: r_skef_core.config.RskefConfig, reference_prior: Optional[Dict[str, float]] = None, csrnet_model: Optional[object] = None) -> Dict",
+          "doc": ""
+        }
+      },
+      "variables": [
+        "BaselineCalibrator",
+        "Dict",
+        "GlobalMotionCompensator",
+        "List",
+        "Optional",
+        "RskefConfig",
+        "Tuple",
+        "compute_density_kinetic_energy",
+        "deque",
+        "estimate_density_map",
+        "evaluate_event_metrics",
+        "evaluate_frame_metrics",
+        "evaluate_operational_metrics",
+        "extract_motion_features"
+      ]
+    }
+  }
+}
