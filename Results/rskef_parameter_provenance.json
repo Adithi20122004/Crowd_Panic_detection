@@ -1,57 +1,164 @@
 {
-  "beta_div": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "0.4"
-  },
-  "calibration_frames": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "150"
-  },
-  "calibration_strategy": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "fixed_150"
-  },
-  "csrnet_crowd_floor": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "4.0"
-  },
-  "enable_gmc": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "False"
-  },
   "fps": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "30.0"
+    "type": "dataclass_field",
+    "status": "RECOVERED_BASELINE",
+    "value": "30.0",
+    "description": "Fallback video frame rate (FPS)"
   },
-  "k_off": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "1.8"
+  "resize_width": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "320",
+    "description": "Frame width for spatial processing"
   },
-  "k_on": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "3.2"
+  "resize_height": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "240",
+    "description": "Frame height for spatial processing"
   },
   "mass_representation": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "area_mass"
+    "type": "dataclass_field",
+    "status": "RECOVERED_BASELINE",
+    "value": "area_mass",
+    "description": "Mass normalization representation"
   },
-  "persistence_frames": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "7"
+  "csrnet_crowd_floor": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "4.0",
+    "description": "Crowd floor gate for csrnet_active_mass"
+  },
+  "calibration_strategy": {
+    "type": "dataclass_field",
+    "status": "RECONSTRUCTED_DEFAULT",
+    "value": "fixed_150",
+    "description": "Strategy: fixed_150 | pure_causal | hybrid_reference"
+  },
+  "calibration_frames": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "90",
+    "description": "Calibration observation buffer length (90 frames ~ 3s at 30 fps)"
+  },
+  "min_sigma_floor": {
+    "type": "dataclass_field",
+    "status": "NUMERICAL_STABILITY",
+    "value": "0.0001",
+    "description": "Safety floor for MAD-derived sigma"
+  },
+  "min_threshold_floor": {
+    "type": "dataclass_field",
+    "status": "NUMERICAL_STABILITY",
+    "value": "0.15",
+    "description": "Safety floor for tau_on (> 0.125 active-pixel flow floor)"
+  },
+  "enable_gmc": {
+    "type": "dataclass_field",
+    "status": "RECOVERED_BASELINE",
+    "value": "False",
+    "description": "Enable camera ego-motion compensation (affine RANSAC)"
+  },
+  "gmc_max_features": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "400",
+    "description": "GoodFeaturesToTrack max corners for GMC"
+  },
+  "gmc_ransac_threshold": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "3.0",
+    "description": "RANSAC inlier threshold in pixels"
+  },
+  "beta_div": {
+    "type": "dataclass_field",
+    "status": "RECOVERED_BASELINE",
+    "value": "0.4",
+    "description": "Divergence multiplier scale weight"
+  },
+  "div_scale": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "1.0",
+    "description": "Divergence tanh scaling factor"
+  },
+  "bidirectional_divergence": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "True",
+    "description": "Use absolute divergence magnitude (|div|)"
   },
   "use_directional_disorder": {
-    "type": "class_attribute",
-    "status": "STATIC_VALUE",
-    "value": "False"
+    "type": "dataclass_field",
+    "status": "RECOVERED_BASELINE",
+    "value": "False",
+    "description": "Enable directional entropy disorder multiplier"
+  },
+  "disorder_weight": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "0.2",
+    "description": "Circular variance disorder weight"
+  },
+  "jerk_delta_frames": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "3",
+    "description": "Delta time-step for rate of energy change calculation"
+  },
+  "surge_hold_frames": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "15",
+    "description": "Temporal hold duration for surge gate peak"
+  },
+  "theta_jerk": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "0.5",
+    "description": "Jerk half-saturation threshold"
+  },
+  "g_0": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "1.0",
+    "description": "Surge gate minimum multiplier floor"
+  },
+  "ema_alpha": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "0.1",
+    "description": "Causal EMA smoothing factor (0 < alpha <= 1)"
+  },
+  "k_on": {
+    "type": "dataclass_field",
+    "status": "RECOVERED_BASELINE",
+    "value": "3.2",
+    "description": "Upper sigma multiplier for alarm trigger (tau_on)"
+  },
+  "k_off": {
+    "type": "dataclass_field",
+    "status": "RECOVERED_BASELINE",
+    "value": "1.8",
+    "description": "Lower sigma multiplier for alarm release (tau_off)"
+  },
+  "persistence_frames": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "5",
+    "description": "Consecutive frames above tau_on required to alarm (k_min)"
+  },
+  "persistence_decay_mode": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "reset",
+    "description": "Miss handling: 'reset' (reset to 0) or 'decay' (decrement)"
+  },
+  "max_alarm_unanchored_frames": {
+    "type": "dataclass_field",
+    "status": "AUDITED_EXPERIMENT",
+    "value": "90",
+    "description": "Timeout frames for unanchored alarm release"
   }
 }

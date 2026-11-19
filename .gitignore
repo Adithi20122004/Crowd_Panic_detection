@@ -17,3 +17,17 @@ __pycache__/
 Results/**/smoke_test/
 Results/**/full_run/
 Results/**/plots/
+# Raw datasets
+/HAJJv2/
+/UMN/
+
+# Generated validation outputs
+/Results/HAJJv2/
+/Results/UMN/frame_predictions/
+/Results/UMN/smoke_test_*/
+/Results/UMN_Boundary_Checks/
+/Results/final_audit_*/
+
+# Python test cache
+__pycache__/
+*.py[cod]

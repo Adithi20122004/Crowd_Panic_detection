@@ -1,5 +1,15 @@
 """
 Unified detector engine orchestrating R-SKEF execution across configurations.
+
+Addresses audit findings:
+  1. Jerk time base (Issue 3): energy_history deque length set to jerk_delta_frames + 1.
+     e_past is exactly jerk_delta_frames frames in the past, giving a mathematically
+     exact and consistent derivative time base.
+  2. Frame indexing alignment (Issue 4): frame_idx begins at 1 when prev_frame is read,
+     so subsequent frames read inside the loop receive 1-indexed frame numbers (2, 3, ...)
+     matching ground-truth annotation ranges.
+  3. Persistence counter consistency (Issue 5): consecutive_exceed resets to 0 on a miss
+     by default (configurable via cfg.persistence_decay_mode), matching the UMN validation adapter.
 """
 
 from collections import deque
@@ -33,16 +43,19 @@ def run_rskef_detector(
     if not ret:
         raise RuntimeError(f"Cannot read first frame of {video_path}")
 
+    # 1-indexed frame tracking: prev_frame is frame 1
+    frame_idx = 1
+
     prev_frame = cv2.resize(prev_frame, (cfg.resize_width, cfg.resize_height))
     prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
 
-    gmc = GlobalMotionCompensator(cfg.gmc_max_features, cfg.gmc_ransac_threshold) if cfg.enable_gmc else None
+    gmc = GlobalMotionCompensator(cfg.gmc_max_features, cfg.gmc_ransac_threshold, enabled=getattr(cfg, "enable_gmc", False))
     calibrator = BaselineCalibrator(cfg, reference_prior)
 
-    energy_history = deque(maxlen=cfg.jerk_delta_frames + 2)
+    # Exaclty jerk_delta_frames + 1 entries so history[0] is exactly jerk_delta_frames in the past
+    energy_history = deque(maxlen=cfg.jerk_delta_frames + 1)
     gate_history = deque(maxlen=cfg.surge_hold_frames)
 
-    frame_idx = 0
     ema_score: Optional[float] = None
     consecutive_exceed = 0
     alarm_active = False
@@ -51,11 +64,13 @@ def run_rskef_detector(
     records: List[Dict] = []
     gmc_diagnostics_history = []
 
+    decay_mode = getattr(cfg, "persistence_decay_mode", "reset")
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        frame_idx += 1
+        frame_idx += 1  # 2nd video frame is frame_idx = 2 (matches 1-indexed GT)
         frame = cv2.resize(frame, (cfg.resize_width, cfg.resize_height))
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -84,10 +99,10 @@ def run_rskef_detector(
         else:
             raise ValueError(f"Unknown mass representation: {cfg.mass_representation}")
 
-        # 4. Multiplicative Temporal Jerk Surge Gate
+        # 4. Multiplicative Temporal Jerk Surge Gate with exact time base
         energy_history.append(e_base)
-        if len(energy_history) >= cfg.jerk_delta_frames:
-            e_past = energy_history[0]
+        if len(energy_history) > cfg.jerk_delta_frames:
+            e_past = energy_history[0]  # exactly cfg.jerk_delta_frames frames prior
             delta_e = max(0.0, (e_base - e_past) / cfg.jerk_delta_frames)
             r_jerk = delta_e / (e_past + cfg.min_threshold_floor)
         else:
@@ -108,7 +123,7 @@ def run_rskef_detector(
         else:
             ema_score = cfg.ema_alpha * composite_energy + (1.0 - cfg.ema_alpha) * ema_score
 
-        # Ground truth flag for current frame
+        # Ground truth flag for current frame (1-indexed)
         gt_label = int(any(start <= frame_idx <= end for start, end in gt_ranges))
 
         # 5. Dual-Threshold Hysteresis FSM State Update
@@ -125,7 +140,10 @@ def run_rskef_detector(
                 else:
                     pred_label = 0
             else:
-                consecutive_exceed = max(0, consecutive_exceed - 1)
+                if decay_mode == "reset":
+                    consecutive_exceed = 0
+                else:
+                    consecutive_exceed = max(0, consecutive_exceed - 1)
                 pred_label = 0
         else:
             alarm_duration += 1
@@ -188,5 +206,6 @@ def run_rskef_detector(
         **event_m,
         **op_m,
         "records": records,
+        "gmc_diagnostics": gmc_diagnostics_history,
     }
     return result

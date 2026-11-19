@@ -1,12 +1,15 @@
 """
 Density estimation & crowd mass integration module.
 Includes:
-  1. CSRNet PyTorch architecture & checkpoint loader with fast CPU fallback.
-  2. Normalization Option 1 (Existing): Global Crowd Density Normalization.
-  3. Normalization Option 2 (Proposed): Active Crowd Mass Normalization with Soft Gating.
+  1. CSRNet PyTorch architecture & checkpoint loader.
+  2. Normalization Option 1: Global Crowd Density Normalization.
+  3. Normalization Option 2: Active Crowd Mass Normalization with Soft Gating.
+  4. Explicit warning and guard when weights are absent to prevent masquerading
+     Sobel edge proxy as genuine CSRNet neural inference (Issue 6).
 """
 
 import os
+import warnings
 from typing import Optional, Tuple
 import cv2
 import numpy as np
@@ -52,14 +55,35 @@ if TORCH_AVAILABLE:
             return self.backend(self.frontend(x))
 
 
+def load_csrnet_checkpoint(weights_path: str, device: str = "cpu"):
+    """
+    Loads pre-trained CSRNet weights from disk.
+    Raises FileNotFoundError if weights_path does not exist, or ImportError if PyTorch is unavailable.
+    """
+    if not TORCH_AVAILABLE:
+        raise ImportError("PyTorch (torch) is required to load and execute CSRNet.")
+    if not os.path.isfile(weights_path):
+        raise FileNotFoundError(f"CSRNet weights checkpoint not found: {weights_path}")
+
+    model = CSRNet()
+    checkpoint = torch.load(weights_path, map_location=device)
+    state_dict = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+    model.load_state_dict(state_dict)
+    model.to(device)
+    model.eval()
+    return model
+
+
 def estimate_density_map(
     frame_bgr: np.ndarray,
     model: Optional[object] = None,
-    device: str = "cpu"
+    device: str = "cpu",
+    allow_proxy: bool = True
 ) -> np.ndarray:
     """
-    Computes CSRNet density map if model weights are present.
-    Otherwise produces an adaptive edge/intensity luminance density prior for evaluation.
+    Computes CSRNet density map if model weights are provided.
+    If model is None and allow_proxy=True, issues a warning and produces an adaptive
+    Sobel edge-luminance proxy. If allow_proxy=False, raises RuntimeError.
     """
     h, w, _ = frame_bgr.shape
     if model is not None and TORCH_AVAILABLE:
@@ -76,7 +100,18 @@ def estimate_density_map(
         density_full = cv2.resize(raw_density, (w, h), interpolation=cv2.INTER_LINEAR) / 64.0
         return np.clip(density_full, 0.0, None)
     else:
-        # High-fidelity crowd-contrast spatial density proxy when CNN checkpoint is offline
+        if not allow_proxy:
+            raise RuntimeError(
+                "CSRNet model was not provided, and allow_proxy is set to False. "
+                "Provide a trained model via load_csrnet_checkpoint()."
+            )
+        warnings.warn(
+            "estimate_density_map: CSRNet model weights not provided. Falling back to Sobel edge proxy. "
+            "WARNING: This proxy is NOT genuine CSRNet neural inference and cannot be cited as CSRNet validation.",
+            UserWarning,
+            stacklevel=2
+        )
+        # Spatial edge-contrast density proxy when CNN checkpoint is offline
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (7, 7), 2.0)
         grad_x = cv2.Sobel(blur, cv2.CV_32F, 1, 0, ksize=3)

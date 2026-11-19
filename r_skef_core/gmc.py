@@ -1,25 +1,20 @@
 """
 r_skef_core/gmc.py -- RECONSTRUCTED global motion compensation (ego-motion) module.
 
-NOT recovered historical source. Written to satisfy the interface detector.py uses:
+EXPERIMENTAL ABLATION MODULE:
+Global motion compensation is maintained as an experimental ablation tool for
+investigating camera motion compensation in crowd scenes.
 
-    gmc = GlobalMotionCompensator(cfg.gmc_max_features, cfg.gmc_ransac_threshold)
-    aligned_prev, diag = gmc.estimate_and_warp(prev_gray, curr_gray)
-
-detector.py then computes optical flow between `aligned_prev` and `curr_gray`, so
-camera motion is (approximately) removed from the flow. When enable_gmc is False the
-detector never constructs this class and uses the raw previous frame, so the
-uncorrected path is untouched.
-
-RECONSTRUCTED DESIGN DECISIONS (none historically verified):
-  * Features: Shi-Tomasi corners on the previous frame (max_features corners).
-  * Tracking: pyramidal Lucas-Kanade to the current frame.
-  * Model: 4-DoF similarity (translation, rotation, uniform scale) fitted with RANSAC
-    (cv2.estimateAffinePartial2D); gmc_ransac_threshold is the reprojection threshold in pixels.
-  * Fallback: if too few matches or the fit fails, return the unwarped previous frame
-    (equivalent to GMC being off for that frame) and report success=False in diag.
-  * Known limitation: in a dense moving crowd, most trackable corners may lie on moving
-    people, so RANSAC can lock onto crowd motion instead of the background.
+CRITICAL METHODOLOGICAL CONSTRAINTS:
+- GMC can be explicitly disabled (enabled=False) for static-camera evaluation.
+- Neither translation limits nor affine filtering guards solve false motion compensation
+  on dense crowd scenes, where trackable features frequently lie on moving people
+  rather than static background elements.
+- Camera-motion compensation cannot be claimed as accurate without independent
+  camera-motion ground truth (e.g. IMU telemetry or fixed fiducial markers).
+- Diagnostic fields are reported per frame: estimated translation (tx, ty, translation,
+  translation_magnitude), rotation (rotation_deg), scale, inlier count (n_inliers),
+  inlier ratio (inlier_ratio), and whether a warp was applied (warp_applied).
 """
 from typing import Dict, Tuple
 
@@ -38,6 +33,8 @@ _MIN_INLIERS = 8
 _MIN_INLIER_RATIO = 0.30
 
 # Plausibility limits for frame-to-frame camera motion.
+# Note: These bounds filter extreme numerical outliers but do NOT solve false motion
+# compensation induced by moving crowd features.
 _MIN_SCALE = 0.90
 _MAX_SCALE = 1.10
 _MAX_ROTATION_DEG = 5.0
@@ -45,13 +42,14 @@ _MAX_TRANSLATION_RATIO = 0.10
 
 
 class GlobalMotionCompensator:
-    def __init__(self, max_features: int, ransac_threshold: float):
+    def __init__(self, max_features: int, ransac_threshold: float, enabled: bool = True):
         if int(max_features) < 1:
             raise ValueError("max_features must be >= 1")
         if float(ransac_threshold) <= 0:
             raise ValueError("ransac_threshold must be > 0")
         self.max_features = int(max_features)
         self.ransac_threshold = float(ransac_threshold)
+        self.enabled = bool(enabled)
 
     def _fallback(self, prev_gray: np.ndarray, reason: str, n_features: int = 0, n_matches: int = 0
                   ) -> Tuple[np.ndarray, Dict]:
@@ -59,24 +57,32 @@ class GlobalMotionCompensator:
             isinstance(prev_gray, np.ndarray)
             and prev_gray.ndim >= 2
         )
+        is_disabled = (reason == "gmc_disabled")
         return prev_gray, {
             "success": False, "reason": reason,
-            "fallback": True,
+            "fallback": not is_disabled,
             "warp_output_valid": output_valid,
             "affine_estimated": False,
             "affine_estimate_accepted": False,
             "warp_applied": False,
             "estimated_non_identity_transform": False,
             "n_features": n_features, "n_matches": n_matches, "n_inliers": 0,
-            "inlier_ratio": 0.0, "tx": 0.0, "ty": 0.0, "rotation_deg": 0.0, "scale": 1.0,
+            "inlier_ratio": 0.0, "tx": 0.0, "ty": 0.0,
+            "translation": (0.0, 0.0),
+            "translation_magnitude": 0.0,
+            "rotation_deg": 0.0, "scale": 1.0,
+            "gmc_enabled": self.enabled,
         }
 
     def estimate_and_warp(self, prev_gray: np.ndarray, curr_gray: np.ndarray) -> Tuple[np.ndarray, Dict]:
-        """Return a candidate-aligned frame and diagnostics, not an accuracy guarantee.
+        """Return candidate-aligned frame and diagnostics for experimental ablation.
 
-        ``success`` means the affine estimate passed local guards and was warped.
-        It does not establish that the estimate represents camera motion.
+        GMC can be explicitly disabled (enabled=False) for static-camera evaluation.
+        ``success=True`` means an affine estimate passed local consistency guards and
+        a warp was applied. It does NOT claim ground-truth camera motion accuracy.
         """
+        if not self.enabled:
+            return self._fallback(prev_gray, "gmc_disabled")
 
         h, w = prev_gray.shape[:2]
 
@@ -159,6 +165,8 @@ class GlobalMotionCompensator:
                 "inlier_ratio": float(inlier_ratio),
                 "tx": tx,
                 "ty": ty,
+                "translation": (tx, ty),
+                "translation_magnitude": float(np.hypot(tx, ty)),
                 "rotation_deg": rotation_deg,
                 "scale": scale,
                 "estimated_non_identity_transform": non_identity_estimate,
@@ -175,6 +183,13 @@ class GlobalMotionCompensator:
                 "affine_estimated": True,
                 "n_inliers": n_inliers,
                 "inlier_ratio": float(inlier_ratio),
+                "tx": tx,
+                "ty": ty,
+                "translation": (tx, ty),
+                "translation_magnitude": float(np.hypot(tx, ty)),
+                "rotation_deg": rotation_deg,
+                "scale": scale,
+                "estimated_non_identity_transform": non_identity_estimate,
             })
             return aligned_prev, diag
 
@@ -197,6 +212,8 @@ class GlobalMotionCompensator:
                 "inlier_ratio": float(inlier_ratio),
                 "tx": tx,
                 "ty": ty,
+                "translation": (tx, ty),
+                "translation_magnitude": float(np.hypot(tx, ty)),
                 "rotation_deg": rotation_deg,
                 "scale": scale,
                 "estimated_non_identity_transform": non_identity_estimate,
@@ -226,8 +243,11 @@ class GlobalMotionCompensator:
             "inlier_ratio": float(inlier_ratio),
             "tx": tx,
             "ty": ty,
+            "translation": (tx, ty),
+            "translation_magnitude": float(np.hypot(tx, ty)),
             "rotation_deg": rotation_deg,
             "scale": scale,
+            "gmc_enabled": True,
         }
 
         return aligned_prev, diag

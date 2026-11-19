@@ -4,7 +4,11 @@ import re
 import cv2
 import pandas as pd
 
-BASE = r"C:\crowd_project\Research_Validation\HAJJv2\Original_Videos\HAJJv2.Dataset"
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+BASE = os.environ.get(
+    "HAJJ_DIR",
+    os.path.join(PROJECT_ROOT, "HAJJv2", "Original_Videos", "HAJJv2.Dataset")
+)
 
 VIDEO_DIR = os.path.join(BASE, "Testing", "Videos")
 LABEL_DIR = os.path.join(BASE, "Testing", "Labels")

@@ -51,14 +51,16 @@ from typing import Dict, List, Tuple, Any, Optional
 import cv2
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_curve, auc, precision_recall_curve
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # Ensure local validation root is on sys.path
-VALIDATION_ROOT = r"C:\crowd_project\Research_Validation"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+VALIDATION_ROOT = PROJECT_ROOT
 RESULTS_ROOT = os.path.join(VALIDATION_ROOT, "Results")
 if VALIDATION_ROOT not in sys.path:
     sys.path.insert(0, VALIDATION_ROOT)
@@ -179,11 +181,11 @@ EXPERIMENTAL_PROVENANCE_REGISTRY = {
         "justification": "Prevents division by zero or degenerate scale estimates during completely motionless video segments."
     },
     "min_threshold_floor": {
-        "value": 0.05,
+        "value": 0.15,
         "status": "NUMERICAL_STABILITY_PARAMETER",
         "affects_algorithm": True,
         "provenance": "Safety floor for thresholds_from_stats().",
-        "justification": "Ensures positive detection thresholds even under ultra-low baseline kinetic energy."
+        "justification": "Ensures positive detection thresholds safely above the 0.125 minimum active-pixel flow energy (0.5 * 0.5^2 px/frame)."
     },
     "g_0": {
         "value": 1.0,
@@ -437,15 +439,15 @@ class RSKEFEnvironment:
             "BaselineCalibrator is not invoked."
         )
 
-    def instantiate_gmc(self):
+    def instantiate_gmc(self, enabled: bool = True):
         """Instantiates GlobalMotionCompensator using proven parameters."""
         max_feat = EXPERIMENTAL_PROVENANCE_REGISTRY["gmc_max_features"]["value"]
         ransac_th = EXPERIMENTAL_PROVENANCE_REGISTRY["gmc_ransac_threshold"]["value"]
         try:
-            return self.gmc_class(max_features=max_feat, ransac_threshold=ransac_th)
+            return self.gmc_class(max_features=max_feat, ransac_threshold=ransac_th, enabled=enabled)
         except TypeError:
             try:
-                return self.gmc_class(max_feat, ransac_th)
+                return self.gmc_class(max_feat, ransac_th, enabled)
             except Exception:
                 return self.gmc_class()
 
@@ -499,55 +501,67 @@ def extract_scalar_kinetic_energy(
 
 def run_event_metric_self_test():
     """
-    Mathematical unit test with known synthetic ground truth, known delay, and known premature alarm.
-    Asserts correctness of delay calculation and false-alarm clustering before processing real data.
+    Mathematical unit test that directly calls the production evaluate_metrics_exact function
+    with known synthetic ground truth, known delay, and known premature alarm.
+    Asserts correctness of:
+      1. Pre-existing alarms active immediately before onset are flagged and NOT counted as clean post-onset hits.
+      2. Clean post-onset rising edges are counted with exact latency to first rising edge.
+      3. Events with no valid detection are counted in Events_No_Valid_Detection.
     """
-    total_len = 100
+    total_len = 300
     fps = 30.0
-    s_0, e_0 = 0, 100
-    calib_w = 20
-    s_eval = s_0 + calib_w  # 20
-    anom_onset = 60         # Event onset at frame index 60
 
-    # Ground truth: 0 for 0..59, 1 for 60..99
+    # Three synthetic sequences:
+    # Seq 1 (0..100): Onset at 60. Straddling premature alarm at 58..62 (active at 59), clears at 63, rises at 65.
+    #   -> Pre-existing alarm at onset: MUST NOT be counted as clean detection.
+    # Seq 2 (100..200): Onset at 160. Frame 159 is 0. Rises cleanly at frame 165 (delay 5 frames = 166.7 ms).
+    #   -> Clean post-onset rising-edge detection.
+    # Seq 3 (200..300): Onset at 260. No alarms.
+    #   -> No valid detection.
+
     y_true = np.zeros(total_len, dtype=int)
-    y_true[anom_onset:e_0] = 1
+    y_true[60:100] = 1
+    y_true[160:200] = 1
+    y_true[260:300] = 1
 
-    # Synthetic prediction:
-    # 1. A normal false alarm at frames 30..32.
-    # 2. A premature alarm at frames 58..62 that straddles the event onset.
-    # 3. A new event alarm at frame 65, five frames after onset.
     y_pred = np.zeros(total_len, dtype=int)
-    y_pred[30:33] = 1
-    y_pred[58:63] = 1
-    y_pred[65:80] = 1
+    # Seq 1
+    y_pred[30:33] = 1   # Normal FA cluster
+    y_pred[58:63] = 1   # Straddles onset at 60 (active at frame 59)
+    y_pred[65:80] = 1   # Alarm rises again at 65 after clearing at 63
+    # Seq 2
+    y_pred[165:180] = 1 # Clean post-onset rising edge at frame 165
+    # Seq 3: no alarm
 
-    # Evaluation
-    norm_preds = y_pred[s_eval:anom_onset]
-    diffs = np.diff(np.pad(norm_preds, (1, 1), 'constant'))
-    fa_clusters = int(np.sum(diffs == 1))
-    assert fa_clusters == 2, f"Self-test failed: expected 2 premature clusters, got {fa_clusters}"
+    y_scores = np.linspace(0.0, 1.0, total_len)
+    eval_mask = np.zeros(total_len, dtype=bool)
+    eval_mask[20:100] = True
+    eval_mask[120:200] = True
+    eval_mask[220:300] = True
 
-    anom_preds = y_pred[anom_onset:e_0]
-    previous = y_pred[anom_onset - 1]
-    event_starts = np.flatnonzero(
-        (anom_preds == 1) & (np.r_[previous, anom_preds[:-1]] == 0)
+    sequence_meta = [
+        {"clip_id": 1, "eval_start": 20, "eval_end": 100, "anom_start": 60},
+        {"clip_id": 2, "eval_start": 120, "eval_end": 200, "anom_start": 160},
+        {"clip_id": 3, "eval_start": 220, "eval_end": 300, "anom_start": 260},
+    ]
+
+    res = evaluate_metrics_exact(
+        y_true_full=y_true,
+        y_pred_full=y_pred,
+        y_scores_full=y_scores,
+        eval_mask=eval_mask,
+        sequence_meta=sequence_meta,
+        fps=fps
     )
-    assert len(event_starts) > 0, "Self-test failed: expected post-onset event alarm"
-    delay_frames = event_starts[0]
-    assert delay_frames == 5, f"Self-test failed: expected 5 frames delay, got {delay_frames}"
-    delay_ms = round(delay_frames / fps * 1000.0, 1)
-    assert delay_ms == 166.7, f"Self-test failed: expected 166.7 ms, got {delay_ms}"
-    already_active = np.zeros(total_len, dtype=int)
-    already_active[58:] = 1
-    active_at_onset = already_active[anom_onset:e_0]
-    onset_previous = already_active[anom_onset - 1]
-    onset_edges = np.flatnonzero(
-        (active_at_onset == 1) & (np.r_[onset_previous, active_at_onset[:-1]] == 0)
-    )
-    assert len(onset_edges) == 0, "Self-test failed: pre-onset alarm must not count as event detection."
 
-    print("[Self-Test Passed] Event-level metric calculus verified on synthetic ground truth.")
+    assert res["Events_With_Preexisting_Alarm"] == 1, f"Expected 1 pre-existing alarm event, got {res['Events_With_Preexisting_Alarm']}"
+    assert res["Clean_Post_Onset_Detections"] == 1, f"Expected 1 clean detection, got {res['Clean_Post_Onset_Detections']}"
+    assert res["Events_No_Valid_Detection"] == 1, f"Expected 1 missed event, got {res['Events_No_Valid_Detection']}"
+    assert abs(res["Clean_Mean_Delay_ms"] - 166.7) < 1.0, f"Expected clean mean delay ~166.7 ms, got {res['Clean_Mean_Delay_ms']}"
+    assert res["Clean_Event_Hit_Rate"] == round(1.0 / 3.0 * 100.0, 1), f"Expected clean hit rate 33.3%, got {res['Clean_Event_Hit_Rate']}"
+    assert res["Event_Hits"] == 1, f"Backward compatibility hit count mismatch: {res['Event_Hits']}"
+
+    print("[Self-Test Passed] Production evaluate_metrics_exact() verified on synthetic ground truth.")
 
 
 # ======================================================================================
@@ -561,10 +575,11 @@ class ModularRSKEFAdapter:
       - Component-level baseline ablations: C1, C2, C3, C4
       - Complete RSKEF detector architecture: C5 (Static camera), C6 (Moving camera + GMC)
     """
-    def __init__(self, config_name: str, env: RSKEFEnvironment, calib_window: int = 90):
+    def __init__(self, config_name: str, env: RSKEFEnvironment, calib_window: int = 90, disable_gmc: bool = False):
         self.config_name = config_name
         self.env = env
         self.calib_window = calib_window
+        self.disable_gmc = disable_gmc
 
         self.buffer: List[float] = []
         self.calibration_scores: List[float] = []
@@ -598,7 +613,7 @@ class ModularRSKEFAdapter:
         # GMC Instance for C6
         self.gmc_instance = None
         if config_name == "C6_RSKEF_GMC":
-            self.gmc_instance = self.env.instantiate_gmc()
+            self.gmc_instance = self.env.instantiate_gmc(enabled=not disable_gmc)
 
     def reset_sequence(self):
         self.buffer = []
@@ -862,27 +877,33 @@ def evaluate_metrics_exact(
     if total != len(y_t):
         raise AssertionError("Confusion-matrix cells do not sum to evaluated-frame count.")
 
-    acc = (tp + tn) / total * 100.0 if total > 0 else 0.0
-    prec = tp / (tp + fp) * 100.0 if (tp + fp) > 0 else 0.0
-    rec = tp / (tp + fn) * 100.0 if (tp + fn) > 0 else 0.0
-    f1 = (2 * prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
-    spec = tn / (tn + fp) * 100.0 if (tn + fp) > 0 else 100.0
-    fpr = fp / (tn + fp) * 100.0 if (tn + fp) > 0 else 0.0
+    acc = (tp + tn) / total * 100.0 if total > 0 else float("nan")
+    prec = tp / (tp + fp) * 100.0 if (tp + fp) > 0 else float("nan")
+    rec = tp / (tp + fn) * 100.0 if (tp + fn) > 0 else float("nan")
+    if not math.isnan(prec) and not math.isnan(rec) and (prec + rec) > 0:
+        f1 = (2 * prec * rec) / (prec + rec)
+    else:
+        f1 = float("nan")
+    spec = tn / (tn + fp) * 100.0 if (tn + fp) > 0 else float("nan")
+    fpr = fp / (tn + fp) * 100.0 if (tn + fp) > 0 else float("nan")
 
     if len(np.unique(y_t)) > 1:
         fpr_a, tpr_a, _ = roc_curve(y_t, y_s)
         auroc = float(auc(fpr_a, tpr_a))
-        pr_a, rc_a, _ = precision_recall_curve(y_t, y_s)
-        auprc = float(auc(rc_a, pr_a))
+        # Use average_precision_score to avoid trapezoidal interpolation optimism on PR curves
+        auprc = float(average_precision_score(y_t, y_s))
     else:
         auroc, auprc = float("nan"), float("nan")
 
-    delays_ms = []
+    clean_delays_ms = []
     premature_alarms = 0
     premature_alarm_sequences = 0
     false_alarm_clusters = 0
-    event_hits = 0
+    clean_post_onset_detections = 0
+    clean_latency_bounded_hits = 0
     events_with_preexisting_alarm = 0
+    events_no_valid_detection = 0
+    max_latency_frames = int(10.0 * fps)  # 10 second latency tolerance bound
 
     for seq in sequence_meta:
         s_eval = seq["eval_start"]
@@ -899,40 +920,70 @@ def evaluate_metrics_exact(
                 premature_alarms += fa_count
                 premature_alarm_sequences += 1
 
-        # A pre-onset alarm is premature, not a zero-delay event detection.
+        # Check alarm state immediately preceding onset
         anom_preds = y_pred_full[anom_onset:e_eval]
         previous = y_pred_full[anom_onset - 1] if anom_onset > 0 else 0
+
         if previous == 1:
             events_with_preexisting_alarm += 1
-        starts = (
-            np.flatnonzero((anom_preds == 1) & (np.r_[previous, anom_preds[:-1]] == 0))
-            if len(anom_preds) else np.array([], dtype=int)
-        )
-        if len(starts) > 0:
-            event_hits += 1
-            delays_ms.append(float(starts[0] / fps * 1000.0))
+            # An event with an alarm already active immediately before onset must
+            # not be counted as a clean post-onset detection, even if the alarm
+            # later clears and rises again.
+        else:
+            # Clean post-onset search: alarm was inactive immediately prior to onset
+            starts = (
+                np.flatnonzero((anom_preds == 1) & (np.r_[0, anom_preds[:-1]] == 0))
+                if len(anom_preds) else np.array([], dtype=int)
+            )
+            if len(starts) > 0:
+                clean_post_onset_detections += 1
+                delay_f = starts[0]
+                d_ms = float(delay_f / fps * 1000.0)
+                clean_delays_ms.append(d_ms)
+                if delay_f <= max_latency_frames:
+                    clean_latency_bounded_hits += 1
+            else:
+                events_no_valid_detection += 1
 
-    hit_rate = (event_hits / len(sequence_meta)) * 100.0 if sequence_meta else 0.0
-    mean_delay = float(np.mean(delays_ms)) if delays_ms else float("nan")
+    total_events = len(sequence_meta)
+    clean_hit_rate = (clean_post_onset_detections / total_events) * 100.0 if total_events > 0 else float("nan")
+    clean_bounded_hit_rate = (clean_latency_bounded_hits / total_events) * 100.0 if total_events > 0 else float("nan")
+    clean_mean_delay = float(np.mean(clean_delays_ms)) if clean_delays_ms else float("nan")
+    clean_median_delay = float(np.median(clean_delays_ms)) if clean_delays_ms else float("nan")
 
     total_normal_frames = int(np.sum(y_t == 0))
     normal_exposure_seconds = total_normal_frames / fps
     total_normal_hours = normal_exposure_seconds / 3600.0
-    fa_per_hour = (false_alarm_clusters / total_normal_hours) if total_normal_hours > 0 else 0.0
+    fa_per_hour = (false_alarm_clusters / total_normal_hours) if total_normal_hours > 0 else float("nan")
+    prevalence = float(np.mean(y_t == 1)) * 100.0 if len(y_t) > 0 else 0.0
 
     return {
-        "Accuracy": round(acc, 2),
-        "Precision": round(prec, 2),
-        "Recall": round(rec, 2),
-        "F1_Score": round(f1, 2),
-        "Specificity": round(spec, 2),
-        "FPR": round(fpr, 2),
+        "Accuracy": round(acc, 2) if not math.isnan(acc) else "N/A",
+        "Precision": round(prec, 2) if not math.isnan(prec) else "N/A",
+        "Recall": round(rec, 2) if not math.isnan(rec) else "N/A",
+        "F1_Score": round(f1, 2) if not math.isnan(f1) else "N/A",
+        "Specificity": round(spec, 2) if not math.isnan(spec) else "N/A",
+        "FPR": round(fpr, 2) if not math.isnan(fpr) else "N/A",
         "AUROC": round(auroc, 4) if not math.isnan(auroc) else "N/A",
         "AUPRC": round(auprc, 4) if not math.isnan(auprc) else "N/A",
-        "Event_Hit_Rate": round(hit_rate, 1),
-        "Event_Misses": len(sequence_meta) - event_hits,
+        "Positive_Prevalence_%": round(prevalence, 2),
+        "Clean_Event_Hit_Rate": round(clean_hit_rate, 1) if not math.isnan(clean_hit_rate) else "N/A",
+        "Clean_Latency_Bounded_Hit_Rate_10s": round(clean_bounded_hit_rate, 1) if not math.isnan(clean_bounded_hit_rate) else "N/A",
+        "Clean_Post_Onset_Detections": clean_post_onset_detections,
+        "Clean_Latency_Bounded_Hits_10s": clean_latency_bounded_hits,
         "Events_With_Preexisting_Alarm": events_with_preexisting_alarm,
-        "Mean_Delay_ms": round(mean_delay, 1) if not math.isnan(mean_delay) else "N/A",
+        "Events_No_Valid_Detection": events_no_valid_detection,
+        "Clean_Mean_Delay_ms": round(clean_mean_delay, 1) if not math.isnan(clean_mean_delay) else "N/A",
+        "Clean_Median_Delay_ms": round(clean_median_delay, 1) if not math.isnan(clean_median_delay) else "N/A",
+        "Clean_Delays_ms": [round(d, 1) for d in clean_delays_ms],
+        # Backward compatibility aliases
+        "Event_Hit_Rate": round(clean_hit_rate, 1) if not math.isnan(clean_hit_rate) else "N/A",
+        "Latency_Bounded_Hit_Rate_10s": round(clean_bounded_hit_rate, 1) if not math.isnan(clean_bounded_hit_rate) else "N/A",
+        "Event_Hits": clean_post_onset_detections,
+        "Latency_Bounded_Hits_10s": clean_latency_bounded_hits,
+        "Event_Misses": events_no_valid_detection,
+        "Mean_Delay_ms": round(clean_mean_delay, 1) if not math.isnan(clean_mean_delay) else "N/A",
+        "All_Delays_ms": [round(d, 1) for d in clean_delays_ms],
         "Premature_Alarms": premature_alarms,
         "Premature_Alarm_Sequences": premature_alarm_sequences,
         "False_Alarm_Clusters": false_alarm_clusters,
@@ -941,8 +992,9 @@ def evaluate_metrics_exact(
         "Normal_Exposure_Seconds": round(normal_exposure_seconds, 3),
         "Normal_Exposure_Hours": round(total_normal_hours, 8),
         "FA_Per_Hour": round(fa_per_hour, 2),
+        "FA_Per_Hour_Extrapolated": round(fa_per_hour, 2),
         "Score_Metric_Type": "continuous anomaly scores; C2 uses its five-observation moving average",
-        "AUPRC_Method": "trapezoidal area under precision-recall curve",
+        "AUPRC_Method": "sklearn average_precision_score (uninflated)",
         "Confusion_Matrix_TN_FP_FN_TP": json.dumps([[tn, fp], [fn, tp]]),
         "TP": tp, "TN": tn, "FP": fp, "FN": fn
     }
@@ -952,7 +1004,14 @@ def evaluate_metrics_exact(
 # 7. MAIN EXPERIMENTAL RUNNER
 # ======================================================================================
 
-def run_umn_ablations(video_path: str, candidate_gt_path: str, output_base: str, smoke_test: bool = False):
+def run_umn_ablations(
+    video_path: str,
+    candidate_gt_path: str,
+    output_base: str,
+    smoke_test: bool = False,
+    allow_overwrite: bool = False,
+    disable_gmc: bool = False
+):
     results_root = os.path.normcase(os.path.abspath(RESULTS_ROOT))
     output_base_abs = os.path.normcase(os.path.abspath(output_base))
     if os.path.commonpath([results_root, output_base_abs]) != results_root:
@@ -1121,15 +1180,25 @@ def run_umn_ablations(video_path: str, candidate_gt_path: str, output_base: str,
     # 4. Strict Directory Isolation
     mode_dir = "smoke_test" if smoke_test else "full_run"
     target_dir = os.path.join(output_base, "UMN", mode_dir)
-    if os.path.exists(target_dir):
-        raise FileExistsError(
-            f"Refusing to overwrite existing output directory: {target_dir}. "
-            "Choose a new --output directory under Results."
-        )
     canonical_summary = os.path.join(output_base, "UMN", "ablation_results.csv")
-    if not smoke_test and os.path.exists(canonical_summary):
+
+    if os.path.exists(target_dir):
+        if allow_overwrite:
+            print(f"  [Notice] --allow_overwrite active. Writing results into existing directory: {target_dir}")
+        elif smoke_test:
+            # Auto-version smoke test directory with timestamp to allow immediate reruns
+            target_dir = os.path.join(output_base, "UMN", f"{mode_dir}_{time.strftime('%Y%m%d_%H%M%S')}")
+            print(f"  [Notice] Existing smoke test directory found. Auto-versioning output to: {target_dir}")
+        else:
+            raise FileExistsError(
+                f"Refusing to overwrite existing output directory: {target_dir}. "
+                "Specify --allow_overwrite or choose a new --output directory."
+            )
+
+    if not smoke_test and os.path.exists(canonical_summary) and not allow_overwrite:
         raise FileExistsError(
-            f"Refusing to overwrite existing experiment results: {canonical_summary}"
+            f"Refusing to overwrite existing experiment results: {canonical_summary}. "
+            "Specify --allow_overwrite if you intend to replace canonical results."
         )
     out_frames_dir = os.path.join(target_dir, "frame_predictions")
     out_plots_dir = os.path.join(target_dir, "plots")
@@ -1150,7 +1219,7 @@ def run_umn_ablations(video_path: str, candidate_gt_path: str, output_base: str,
         ("C2_Flow_TemporalFilter", "C1 threshold + five-observation moving-average score."),
         ("C3_Flow_RobustMAD", "Flow energy + rolling robust threshold; no hysteresis."),
         ("C4_Flow_MAD_Hysteresis", "Rolling robust threshold + hysteresis + persistence; ungated baseline."),
-        ("C5_Complete_RSKEF", "Adapter subset: state-gated rolling robust threshold + hysteresis + persistence; no GMC, jerk gate, or EMA."),
+        ("C5_StateGated_MAD_Hysteresis", "Adapter subset: state-gated rolling robust threshold + hysteresis + persistence; no GMC, jerk gate, or EMA."),
         ("C6_RSKEF_GMC", "C5 adapter subset + reconstructed GMC; no independent camera-motion accuracy validation.")
     ]
 
@@ -1162,7 +1231,7 @@ def run_umn_ablations(video_path: str, candidate_gt_path: str, output_base: str,
         t0 = time.time()
         print(f"\n  >> Running {cname} ...")
         print(f"     Description: {cdesc}")
-        adapter = ModularRSKEFAdapter(cname, env, calib_window=CALIB_WINDOW)
+        adapter = ModularRSKEFAdapter(cname, env, calib_window=CALIB_WINDOW, disable_gmc=disable_gmc)
 
         scores = np.zeros(n_frames, dtype=float)
         preds = np.zeros(n_frames, dtype=int)
@@ -1367,8 +1436,9 @@ def run_umn_ablations(video_path: str, candidate_gt_path: str, output_base: str,
         raise AssertionError("Persisted summary row count differs from the in-memory metrics.")
     for row_index, metrics in enumerate(summary_rows):
         persisted = persisted_summary.iloc[row_index]
-        for key, value in metrics.items():
+        for key in cols:
             saved_value = persisted[key]
+            value = metrics.get(key)
             if isinstance(value, (int, float)):
                 agrees = math.isclose(float(saved_value), float(value), rel_tol=0.0, abs_tol=1e-9)
             else:
@@ -1534,7 +1604,7 @@ def run_umn_ablations(video_path: str, candidate_gt_path: str, output_base: str,
                     },
                     "persistence_observations": {
                         "value": EXPERIMENTAL_PROVENANCE_REGISTRY["k_min"]["value"],
-                        "configurations": ["C4_Flow_MAD_Hysteresis", "C5_Complete_RSKEF", "C6_RSKEF_GMC"],
+                        "configurations": ["C4_Flow_MAD_Hysteresis", "C5_StateGated_MAD_Hysteresis", "C6_RSKEF_GMC"],
                         "provenance": "Explicit validation parameter; not verified historical RSKEF.",
                     },
                     "robust_threshold_constants": {
@@ -1585,10 +1655,16 @@ def run_umn_ablations(video_path: str, candidate_gt_path: str, output_base: str,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RSKEF UMN Controlled Ablations Runner")
-    parser.add_argument("--video", default=r"C:\crowd_project\Research_Validation\UMN\Crowd-Activity-All.avi", help="Path to UMN AVI")
-    parser.add_argument("--gt", default=r"C:\crowd_project\Research_Validation\Results\UMN\candidate_umn_ground_truth.csv", help="Candidate GT CSV")
-    parser.add_argument("--output", default=r"C:\crowd_project\Research_Validation\Results", help="Base output directory")
+    default_vid = os.environ.get("UMN_VIDEO", os.path.join(PROJECT_ROOT, "UMN", "Crowd-Activity-All.avi"))
+    default_gt = os.environ.get("UMN_GT", os.path.join(PROJECT_ROOT, "Results", "UMN", "candidate_umn_ground_truth.csv"))
+    default_out = os.environ.get("OUTPUT_DIR", os.path.join(PROJECT_ROOT, "Results"))
+
+    parser.add_argument("--video", default=default_vid, help="Path to UMN AVI")
+    parser.add_argument("--gt", default=default_gt, help="Candidate GT CSV")
+    parser.add_argument("--output", default=default_out, help="Base output directory")
     parser.add_argument("--smoke_test", action="store_true", help="Quick verification run on >=650 frames")
+    parser.add_argument("--allow_overwrite", action="store_true", help="Allow overwriting existing output directory or canonical results")
+    parser.add_argument("--disable_gmc", action="store_true", help="Explicitly disable GMC for static-camera evaluation")
     args = parser.parse_args()
 
-    run_umn_ablations(args.video, args.gt, args.output, smoke_test=args.smoke_test)
+    run_umn_ablations(args.video, args.gt, args.output, smoke_test=args.smoke_test, allow_overwrite=args.allow_overwrite, disable_gmc=args.disable_gmc)

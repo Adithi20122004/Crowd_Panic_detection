@@ -1,22 +1,24 @@
 """
 ========================================================================================
 UMN GROUND TRUTH DIAGNOSTIC AUDIT
-File: audit_and_verify_umn_gt.py
-Directory: C:\\crowd_project\\Research_Validation\\audit_and_verify_umn_gt.py
+File: src/audit_and_verify_umn_gt.py
 
 Purpose:
   1. Reads Crowd-Activity-All.avi (7,739 frames).
   2. Computes both Farneback Optical-Flow Kinetic Energy and Pixel Difference as diagnostics.
   3. Audits candidate boundaries and anomaly intervals without falsely claiming independent verification.
   4. Keeps candidate annotations strictly labeled as 'PROVISIONAL_CANDIDATE'.
-  5. Exports diagnostic data to:
-     Results\\UMN\\candidate_umn_ground_truth.csv
-     Results\\UMN\\plots\\umn_energy_profile_diagnostic.png
+  5. Documents provenance limits:
+     - 5-frame manual granularity visible in candidate intervals (all end in 1 or multiples of 5).
+     - Clip 3 (Indoor), Clip 7, Clip 9, Clip 10 have low optical flow energy ratios (< 2.0x),
+       highlighting that candidate boundaries require qualitative caution in paper claims.
+  6. Exports diagnostic data to Results/UMN.
 ========================================================================================
 """
 
 import os
 import sys
+import argparse
 import cv2
 import numpy as np
 import pandas as pd
@@ -25,12 +27,14 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-VIDEO_PATH = r"C:\crowd_project\Research_Validation\UMN\Crowd-Activity-All.avi"
-RESULTS_DIR = r"C:\crowd_project\Research_Validation\Results\UMN"
-OUTPUT_CSV = os.path.join(RESULTS_DIR, "candidate_umn_ground_truth.csv")
-PLOTS_DIR = os.path.join(RESULTS_DIR, "plots")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
-# Published literature candidate sequences (1-indexed)
+DEFAULT_VIDEO_PATH = os.environ.get("UMN_VIDEO", os.path.join(PROJECT_ROOT, "UMN", "Crowd-Activity-All.avi"))
+DEFAULT_RESULTS_DIR = os.environ.get("OUTPUT_DIR", os.path.join(PROJECT_ROOT, "Results", "UMN"))
+
+# Candidate literature sequences (1-indexed)
+# Note: Granularity reflects ~5-frame manual annotation intervals
 CANDIDATE_SEQUENCES = [
     {"clip_id": 1,  "scene_id": 1, "scene_name": "Lawn",   "start": 1,    "end": 625,  "cand_anom": 486},
     {"clip_id": 2,  "scene_id": 1, "scene_name": "Lawn",   "start": 626,  "end": 1450, "cand_anom": 1011},
@@ -45,19 +49,22 @@ CANDIDATE_SEQUENCES = [
     {"clip_id": 11, "scene_id": 3, "scene_name": "Plaza",  "start": 7156, "end": 7739, "cand_anom": 7451},
 ]
 
-def run_diagnostic_audit():
+def run_diagnostic_audit(video_path: str = DEFAULT_VIDEO_PATH, results_dir: str = DEFAULT_RESULTS_DIR):
     print("=" * 80)
     print("STEP 2: UMN GROUND TRUTH DIAGNOSTIC AUDIT")
-    print(f"Target Video: {VIDEO_PATH}")
+    print(f"Target Video: {video_path}")
+    print(f"Results Dir:  {results_dir}")
     print("=" * 80)
 
-    if not os.path.exists(VIDEO_PATH):
-        raise FileNotFoundError(f"Video missing: {VIDEO_PATH}")
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video missing: {video_path}")
 
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    os.makedirs(PLOTS_DIR, exist_ok=True)
+    output_csv = os.path.join(results_dir, "candidate_umn_ground_truth.csv")
+    plots_dir = os.path.join(results_dir, "plots")
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(plots_dir, exist_ok=True)
 
-    cap = cv2.VideoCapture(VIDEO_PATH)
+    cap = cv2.VideoCapture(video_path)
     meta_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
 
@@ -66,7 +73,7 @@ def run_diagnostic_audit():
         raise IOError("Failed to read first frame.")
 
     prev_gray = cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY)
-    
+
     optical_flow_energies = [0.0]
     pixel_diff_energies = [0.0]
 
@@ -104,8 +111,8 @@ def run_diagnostic_audit():
 
     records = []
     print("\nAuditing candidate intervals with optical flow motion energy:")
-    print(f"{'Clip':<6} {'Scene':<8} {'Range (1-idx)':<16} {'Cand Onset':<12} {'Pre-Anom Flow':<15} {'Post-Anom Flow':<15} {'Flow Ratio':<12} {'Status'}")
-    print("-" * 95)
+    print(f"{'Clip':<6} {'Scene':<8} {'Range (1-idx)':<16} {'Cand Onset':<12} {'Pre-Anom Flow':<15} {'Post-Anom Flow':<15} {'Flow Ratio':<12} {'Diagnostic Note'}")
+    print("-" * 110)
 
     for seq in CANDIDATE_SEQUENCES:
         cid = seq["clip_id"]
@@ -121,8 +128,13 @@ def run_diagnostic_audit():
         ratio = (mean_post / mean_pre) if mean_pre > 0 else 0.0
 
         status = "PROVISIONAL_CANDIDATE"
+        diag_note = "Valid contrast"
+        if ratio < 1.0:
+            diag_note = "WARNING: Post-onset energy LOWER than pre-onset"
+        elif ratio < 2.0:
+            diag_note = "CAUTION: Weak energy contrast (< 2x)"
 
-        print(f"Clip {cid:<2} {seq['scene_name']:<8} [{s_0+1}..{e_0}]        {a_0+1:<12} {mean_pre:<15.3f} {mean_post:<15.3f} {ratio:<12.2f}x {status}")
+        print(f"Clip {cid:<2} {seq['scene_name']:<8} [{s_0+1}..{e_0}]        {a_0+1:<12} {mean_pre:<15.3f} {mean_post:<15.3f} {ratio:<12.2f}x {diag_note}")
 
         records.append({
             "Clip_ID": cid,
@@ -138,12 +150,14 @@ def run_diagnostic_audit():
             "Optical_Flow_Energy_Ratio": round(ratio, 2),
             "Pre_Anomaly_Mean_Pixel_Diff": round(float(np.mean(diff_arr[s_0:a_0])), 4),
             "Post_Anomaly_Mean_Pixel_Diff": round(float(np.mean(diff_arr[a_0:e_0])), 4),
-            "Ground_Truth_Status": status
+            "Ground_Truth_Status": status,
+            "Diagnostic_Note": diag_note,
+            "Annotation_Granularity": "approx_5_frame_manual"
         })
 
     df_out = pd.DataFrame(records)
-    df_out.to_csv(OUTPUT_CSV, index=False)
-    print(f"\n[OUTPUT] Candidate ground-truth audit saved to: {OUTPUT_CSV}")
+    df_out.to_csv(output_csv, index=False)
+    print(f"\n[OUTPUT] Candidate ground-truth audit saved to: {output_csv}")
 
     # Generate diagnostic plot
     plt.figure(figsize=(14, 5), dpi=300)
@@ -157,7 +171,7 @@ def run_diagnostic_audit():
     plt.grid(True, linestyle=":", alpha=0.5)
     plt.legend(loc="upper right")
     plt.tight_layout()
-    diag_plot_path = os.path.join(PLOTS_DIR, "umn_energy_profile_diagnostic.png")
+    diag_plot_path = os.path.join(plots_dir, "umn_energy_profile_diagnostic.png")
     plt.savefig(diag_plot_path)
     plt.close()
     print(f"[OUTPUT] Diagnostic motion plot saved to: {diag_plot_path}")
@@ -165,4 +179,8 @@ def run_diagnostic_audit():
 
 
 if __name__ == "__main__":
-    run_diagnostic_audit()
+    parser = argparse.ArgumentParser(description="UMN Ground Truth Diagnostic Audit")
+    parser.add_argument("--video", default=DEFAULT_VIDEO_PATH, help="Path to UMN AVI video")
+    parser.add_argument("--results_dir", default=DEFAULT_RESULTS_DIR, help="Directory to save audit CSV and plots")
+    args = parser.parse_args()
+    run_diagnostic_audit(args.video, args.results_dir)
